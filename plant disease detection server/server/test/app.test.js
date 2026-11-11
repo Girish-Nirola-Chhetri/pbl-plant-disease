@@ -20,6 +20,7 @@ async function withServer(app, run) {
         assert.ok(address && typeof address === "object");
         await run(`http://127.0.0.1:${address.port}`);
     } finally {
+        server.closeAllConnections();
         await new Promise((resolve, reject) => {
             server.close((error) => error ? reject(error) : resolve());
         });
