@@ -68,3 +68,46 @@ test("chat endpoint rejects an invalid request body", async () => {
         assert.ok(Array.isArray(body.details));
     });
 });
+
+test("chat endpoint rejects request bodies above the configured limit", async () => {
+    await withServer(createApp(), async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ payload: "x".repeat(110_000) }),
+        });
+
+        assert.equal(response.status, 413);
+        assert.deepEqual(await response.json(), { error: "Request body is too large" });
+    });
+});
+
+test("chat endpoint rejects non-alternating conversation history", async () => {
+    await withServer(createApp(), async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                crop: "tomato",
+                disease: "early blight",
+                context: {
+                    description: "",
+                    symptoms: [],
+                    treatment: [],
+                    prevention: [],
+                },
+                messages: [
+                    { role: "user", content: "What is this disease?" },
+                    { role: "assistant", content: "It is early blight." },
+                    { role: "assistant", content: "More information." },
+                    { role: "user", content: "How do I prevent it?" },
+                ],
+            }),
+        });
+
+        assert.equal(response.status, 400);
+        const body = await response.json();
+        assert.equal(body.error, "Invalid request body");
+        assert.ok(body.details.some((detail) => detail.includes("alternate")));
+    });
+});
