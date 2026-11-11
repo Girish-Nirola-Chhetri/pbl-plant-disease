@@ -72,6 +72,29 @@ export function validateChatBody(req: Request, res: Response, next: NextFunction
                 errors.push(`messages[${index}] must have role user/assistant and non-empty content up to 4000 characters`);
             }
         }
+
+        // A submitted chat turn should start with the user and end with the
+        // current user message. This checks protocol shape, not message authenticity.
+        if (body.messages[0] && isRecord(body.messages[0]) && body.messages[0].role !== "user") {
+            errors.push("messages must start with a user message");
+        }
+        if (body.messages[body.messages.length - 1] &&
+            isRecord(body.messages[body.messages.length - 1]) &&
+            body.messages[body.messages.length - 1].role !== "user") {
+            errors.push("messages must end with the current user message");
+        }
+        for (let index = 1; index < body.messages.length; index += 1) {
+            const previous = body.messages[index - 1];
+            const current = body.messages[index];
+            if (
+                isRecord(previous) &&
+                isRecord(current) &&
+                previous.role === current.role
+            ) {
+                errors.push("messages must alternate between user and assistant roles");
+                break;
+            }
+        }
     }
 
     if (errors.length > 0) {
