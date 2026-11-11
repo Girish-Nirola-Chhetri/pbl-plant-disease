@@ -51,63 +51,48 @@ Description:
 ${request.context.description}
 
 Symptoms:
-${request.context.symptoms.join("\n- ")}
+- ${request.context.symptoms.join("\n- ")}
 
 Treatment:
-${request.context.treatment.join("\n- ")}
+- ${request.context.treatment.join("\n- ")}
 
 Prevention:
-${request.context.prevention.join("\n- ")}
+- ${request.context.prevention.join("\n- ")}
             `,
         },
         ...request.messages,
     ];
 
-    const response = await fetch(
-        OPENROUTER_URL,
-        {
-            method: "POST",
-
-            headers: {
-                "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-                "Content-Type": "application/json",
-            },
-
-            body: JSON.stringify({
-                model: env.OPENROUTER_MODEL,
-                messages,
-                temperature: 0.3,
-                max_tokens: 500,
-            }),
-        }
-    );
+    const response = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            model: env.OPENROUTER_MODEL,
+            messages,
+            temperature: 0.3,
+            max_tokens: 500,
+        }),
+        signal: AbortSignal.timeout(20_000),
+    });
 
     if (!response.ok) {
-        const errorText = await response.text();
-
-        console.error(
-            "OpenRouter error:",
-            response.status,
-            errorText
-        );
-
-        throw new Error(
-            `OpenRouter request failed: ${response.status}`
-        );
+        // Do not log the upstream body: it may contain sensitive request details.
+        console.error("OpenRouter request failed with status:", response.status);
+        throw new Error(`OpenRouter request failed: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data: unknown = await response.json();
+    const reply = (
+        data as {
+            choices?: Array<{ message?: { content?: unknown } }>;
+        }
+    )?.choices?.[0]?.message?.content;
 
-    const reply =
-        data?.choices?.[0]?.message?.content;
-
-    if (
-        typeof reply !== "string" ||
-        !reply.trim()
-    ) {
-        throw new Error(
-            "OpenRouter returned an empty response"
-        );
+    if (typeof reply !== "string" || !reply.trim()) {
+        throw new Error("OpenRouter returned an empty response");
     }
 
     return reply.trim();
