@@ -9,19 +9,25 @@ const requestsByIp = new Map<string, RateLimitEntry>();
 
 export function chatRateLimiter(req: Request, res: Response, next: NextFunction) {
     const now = Date.now();
-
-    for (const [ip, entry] of requestsByIp) {
-        if (entry.resetAt <= now) requestsByIp.delete(ip);
-    }
-
     const ip = req.ip || req.socket.remoteAddress || "unknown";
     let entry = requestsByIp.get(ip);
 
     if (!entry || entry.resetAt <= now) {
+        // Sweep expired entries only when admitting a new IP, not on every request.
+        if (requestsByIp.size >= MAX_TRACKED_IPS) {
+            for (const [trackedIp, trackedEntry] of requestsByIp) {
+                if (trackedEntry.resetAt <= now) {
+                    requestsByIp.delete(trackedIp);
+                }
+            }
+        }
+
+        // Keep memory bounded even if all tracked entries are still active.
         if (requestsByIp.size >= MAX_TRACKED_IPS) {
             const oldestIp = requestsByIp.keys().next().value;
             if (oldestIp) requestsByIp.delete(oldestIp);
         }
+
         entry = { count: 0, resetAt: now + WINDOW_MS };
         requestsByIp.set(ip, entry);
     }
