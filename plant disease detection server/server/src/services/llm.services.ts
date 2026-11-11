@@ -1,8 +1,8 @@
 import type { ChatRequest } from "../types/chat.js";
 import { env } from "../config/env.js";
 
-const OPENROUTER_URL =
-    "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const REQUEST_TIMEOUT_MS = 20_000;
 
 const SYSTEM_PROMPT = `
 You are a plant disease information assistant.
@@ -29,14 +29,19 @@ Rules:
   focused on plant health.
 `;
 
-export async function generateLLMResponse(
-    request: ChatRequest
-): Promise<string> {
+type UpstreamError = Error & { status?: number };
+
+function createUpstreamError(message: string, status: number): UpstreamError {
+    return Object.assign(new Error(message), { status });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export async function generateLLMResponse(request: ChatRequest): Promise<string> {
     const messages = [
-        {
-            role: "system",
-            content: SYSTEM_PROMPT,
-        },
+        { role: "system", content: SYSTEM_PROMPT },
         {
             role: "system",
             content: `
@@ -63,36 +68,62 @@ Prevention:
         ...request.messages,
     ];
 
-    const response = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            model: env.OPENROUTER_MODEL,
-            messages,
-            temperature: 0.3,
-            max_tokens: 500,
-        }),
-        signal: AbortSignal.timeout(20_000),
-    });
+    let response: Response;
 
-    if (!response.ok) {
-        // Do not log the upstream body: it may contain sensitive request details.
-        console.error("OpenRouter request failed with status:", response.status);
-        throw new Error(`OpenRouter request failed: ${response.status}`);
+    try {
+        response = await fetch(OPENROUTER_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model: env.OPENROUTER_MODEL,
+                messages,
+                temperature: 0.3,
+                max_tokens: 500,
+            }),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+    } catch (error) {
+        if (error instanceof Error && error.name === "TimeoutError") {
+            throw createUpstreamError("AI provider request timed out", 504);
+        }
+
+        console.error("Unable to reach OpenRouter:", error instanceof Error ? error.message : "Unknown error");
+        throw createUpstreamError("Unable to reach AI provider", 502);
     }
 
-    const data: unknown = await response.json();
-    const reply = (
-        data as {
-            choices?: Array<{ message?: { content?: unknown } }>;
-        }
-    )?.choices?.[0]?.message?.content;
+    if (!response.ok) {
+        // Never return or log the upstream response body to the client.
+        console.error("OpenRouter request failed with status:", response.status);
 
+        if (response.status === 429) {
+            throw createUpstreamError("AI provider rate limit reached", 503);
+        }
+
+        throw createUpstreamError("AI provider returned an unsuccessful response", 502);
+    }
+
+    let data: unknown;
+    try {
+        data = await response.json();
+    } catch {
+        throw createUpstreamError("AI provider returned invalid JSON", 502);
+    }
+
+    if (!isRecord(data) || !Array.isArray(data.choices)) {
+        throw createUpstreamError("AI provider returned an invalid response structure", 502);
+    }
+
+    const firstChoice = data.choices[0];
+    if (!isRecord(firstChoice) || !isRecord(firstChoice.message)) {
+        throw createUpstreamError("AI provider response did not contain a message", 502);
+    }
+
+    const reply = firstChoice.message.content;
     if (typeof reply !== "string" || !reply.trim()) {
-        throw new Error("OpenRouter returned an empty response");
+        throw createUpstreamError("AI provider returned an empty response", 502);
     }
 
     return reply.trim();
