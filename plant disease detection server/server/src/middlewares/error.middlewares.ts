@@ -4,7 +4,9 @@ import type {
     Response,
 } from "express";
 
-type HttpError = Error & {
+import { HttpError } from "../errors/http-error.js";
+
+type ExpressError = Error & {
     status?: number;
     statusCode?: number;
     type?: string;
@@ -14,13 +16,22 @@ export function errorMiddleware(
     error: unknown,
     _req: Request,
     res: Response,
-    _next: NextFunction
+    next: NextFunction
 ) {
+    // Let Express's default handler close the connection if a response has
+    // already started.
     if (res.headersSent) {
-        return;
+        return next(error);
     }
 
-    const httpError = error as HttpError;
+    // Errors we raised on purpose with a client-safe message.
+    if (error instanceof HttpError) {
+        return res.status(error.status).json({
+            error: error.publicMessage,
+        });
+    }
+
+    const httpError = error as ExpressError;
     const errorType = httpError?.type;
 
     if (errorType === "entity.too.large") {

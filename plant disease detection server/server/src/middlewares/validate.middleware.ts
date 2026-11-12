@@ -72,6 +72,11 @@ export function validateChatBody(req: Request, res: Response, next: NextFunction
                 errors.push(`messages[${index}] must have role user/assistant and non-empty content up to 4000 characters`);
             }
         }
+
+        const lastMessage = body.messages[body.messages.length - 1];
+        if (isRecord(lastMessage) && lastMessage.role !== "user") {
+            errors.push("the last message must have role user");
+        }
     }
 
     if (errors.length > 0) {
